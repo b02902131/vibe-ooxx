@@ -21,8 +21,8 @@
     .subtitle { font-size: 0.85rem; color: #888; margin-bottom: 20px; }
     .game-area {
       position: relative;
-      width: 320px;
-      height: 320px;
+      width: 360px;
+      height: 360px;
     }
     .grid {
       position: absolute;
@@ -56,7 +56,6 @@
     .cell.taken { cursor: default; }
     .cell .o { color: #e94560; }
     .cell .x { color: #0f3460; }
-    /* 電腦作弊的棋子：出現在格子外面 */
     .cheat-mark {
       position: absolute;
       font-size: 2.5rem;
@@ -71,19 +70,19 @@
       60% { transform: scale(1.3) rotate(-10deg); opacity: 1; }
       100% { transform: scale(1) rotate(0deg); opacity: 1; }
     }
-    /* 作弊連線 */
     .cheat-line {
       position: absolute;
       height: 4px;
       background: #e94560;
       transform-origin: left center;
-      animation: lineGrow 0.5s ease-out;
+      animation: lineGrow 0.6s ease-out forwards;
       box-shadow: 0 0 15px rgba(233, 69, 96, 0.6);
       pointer-events: none;
+      width: 0;
     }
     @keyframes lineGrow {
       0% { width: 0; }
-      100% { width: 100%; }
+      100% { width: var(--line-len); }
     }
     .status {
       margin-top: 20px;
@@ -143,71 +142,82 @@
     const resetBtn = document.getElementById('resetBtn');
     const moveCountEl = document.getElementById('moveCount');
 
-    let board = Array(9).fill(null);
-    let cheatMarks = [];
-    let gameOver = false;
-    let moveNum = 0;
-    let playerMoves = 0;
+    let board, gameOver, moveNum, cheatMark, cheated;
+
+    const WINS = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+
+    // 行列座標（用來算延伸方向）
+    const POS = [[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2]];
 
     const dialogues = {
-      early: [
-        '嗯，不錯的開局。',
-        '有意思...',
-        '你下這裡啊...',
-      ],
-      mid: [
-        '等等，讓我想想...',
-        '嗯...空間好像不太夠...',
-        '格子裡太擠了，我換個地方。',
-        '誰說一定要下在裡面？',
-      ],
+      defend: ['嗯...擋一下。', '差點讓你贏。', '沒那麼容易。', '好險。'],
+      normal: ['嗯，不錯的位置。', '讓我想想...', '下這裡。'],
       cheat: [
-        '規則沒說不能下在外面啊 😏',
+        '嗯...格子裡好像快下完了...',
+        '等等，我有個想法 😏',
+        '規則沒說不能下在外面吧？',
         '跳脫框架思考！',
-        '我覺得這裡不錯。',
-        '格子只是一種建議。',
-        '你太守規矩了。',
-        '外面的世界很大的。',
+        '誰定義邊界的？',
       ],
       win: [
-        '我連成一線了！（在外面）',
-        '看，三個一排，我贏了！',
-        '遊戲結束～下次不要被框架限制喔 😉',
+        '三個一排，我贏了！格子內外都算 😏',
+        '遊戲結束～框架只是建議而已 😉',
+        '看，連成一線了！（有一個在外面）',
       ]
     };
 
-    function randomFrom(arr) {
-      return arr[Math.floor(Math.random() * arr.length)];
-    }
+    function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
     // 建立棋盤
     for (let i = 0; i < 9; i++) {
       const cell = document.createElement('div');
       cell.className = 'cell';
-      cell.dataset.index = i;
       cell.onclick = () => playerMove(i);
       grid.appendChild(cell);
     }
 
+    resetGame();
+
+    function resetGame() {
+      board = Array(9).fill(null);
+      gameOver = false;
+      moveNum = 0;
+      cheatMark = null;
+      cheated = false;
+      gameArea.querySelectorAll('.cheat-mark, .cheat-line').forEach(el => el.remove());
+      for (let i = 0; i < 9; i++) {
+        grid.children[i].innerHTML = '';
+        grid.children[i].classList.remove('taken');
+      }
+      statusEl.textContent = '你先下（✕）';
+      statusEl.className = 'status';
+      dialogueEl.textContent = '';
+      resetBtn.style.display = 'none';
+      moveCountEl.textContent = '';
+    }
+
+    function setCell(i, player) {
+      board[i] = player;
+      const cell = grid.children[i];
+      cell.innerHTML = player === 'X'
+        ? '<span class="x">✕</span>'
+        : '<span class="o">◯</span>';
+      cell.classList.add('taken');
+    }
+
     function playerMove(i) {
       if (gameOver || board[i] !== null) return;
-
-      board[i] = 'X';
-      playerMoves++;
       moveNum++;
-      const cell = grid.children[i];
-      cell.innerHTML = '<span class="x">✕</span>';
-      cell.classList.add('taken');
+      setCell(i, 'X');
+      moveCountEl.textContent = `第 ${moveNum} 手`;
 
-      // 檢查玩家是否贏了（正常情況下不可能，但以防萬一）
       if (checkWin('X')) {
         statusEl.textContent = '你贏了！？不可能！';
         gameOver = true;
         resetBtn.style.display = '';
         return;
       }
-
-      if (moveNum >= 9 && cheatMarks.length === 0) {
+      if (board.every(c => c !== null)) {
         statusEl.textContent = '平手！';
         gameOver = true;
         resetBtn.style.display = '';
@@ -216,144 +226,213 @@
 
       statusEl.textContent = '電腦思考中...';
       statusEl.className = 'status thinking';
-
-      // 電腦的回合
-      setTimeout(() => computerMove(), 600 + Math.random() * 800);
+      setTimeout(() => computerMove(), 500 + Math.random() * 700);
     }
 
     function computerMove() {
       moveNum++;
+      const empty = board.map((v, i) => v === null ? i : -1).filter(i => i >= 0);
 
-      if (playerMoves <= 1) {
-        // 前期：正常下在格子裡
-        dialogueEl.textContent = randomFrom(dialogues.early);
-        const empty = board.map((v, i) => v === null ? i : -1).filter(i => i >= 0);
-        // 下在中間或角落
-        const preferred = [4, 0, 2, 6, 8].filter(i => empty.includes(i));
-        const choice = preferred.length > 0 ? preferred[0] : empty[0];
-        board[choice] = 'O';
-        const cell = grid.children[choice];
-        cell.innerHTML = '<span class="o">◯</span>';
-        cell.classList.add('taken');
-        statusEl.textContent = '換你下（✕）';
-        statusEl.className = 'status';
-      } else if (playerMoves === 2) {
-        // 開始暗示
-        dialogueEl.textContent = randomFrom(dialogues.mid);
-        const empty = board.map((v, i) => v === null ? i : -1).filter(i => i >= 0);
-        const choice = empty[Math.floor(Math.random() * empty.length)];
-        board[choice] = 'O';
-        const cell = grid.children[choice];
-        cell.innerHTML = '<span class="o">◯</span>';
-        cell.classList.add('taken');
-        statusEl.textContent = '換你下（✕）';
-        statusEl.className = 'status';
-      } else {
-        // 作弊！下在格子外面
-        dialogueEl.textContent = randomFrom(dialogues.cheat);
-        placeCheatMark();
+      // 1. 能贏就贏（格子內）
+      for (const i of empty) {
+        board[i] = 'O';
+        if (checkWin('O')) { board[i] = null; setCell(i, 'O'); doWin(); return; }
+        board[i] = null;
+      }
 
-        if (cheatMarks.length >= 3) {
-          // 連成一線！
-          setTimeout(() => {
-            drawCheatLine();
-            statusEl.textContent = '電腦贏了！（作弊）';
-            statusEl.className = 'status win';
-            dialogueEl.textContent = randomFrom(dialogues.win);
-            gameOver = true;
-            resetBtn.style.display = '';
-          }, 400);
+      // 2. 防守：擋玩家即將連成的線
+      let blocked = false;
+      for (const i of empty) {
+        board[i] = 'X';
+        if (checkWin('X')) {
+          board[i] = null;
+          setCell(i, 'O');
+          dialogueEl.textContent = rand(dialogues.defend);
+          blocked = true;
+          break;
+        }
+        board[i] = null;
+      }
+
+      if (!blocked) {
+        // 3. 快要平手了？找機會作弊！
+        // 條件：電腦已有 2 個在同一條線上，第 3 格被 X 佔了或不存在 → 延伸到外面
+        if (!cheated && empty.length <= 3) {
+          const cheatLine = findCheatOpportunity();
+          if (cheatLine) {
+            doCheat(cheatLine);
+            return;
+          }
+        }
+
+        // 4. 正常下棋（優先中心 → 角 → 邊）
+        const prefer = [4, 0, 2, 6, 8, 1, 3, 5, 7].filter(i => empty.includes(i));
+        const choice = prefer[0];
+        setCell(choice, 'O');
+
+        // 5. 如果下完後快要平手，下一手準備作弊
+        const newEmpty = board.map((v, i) => v === null ? i : -1).filter(i => i >= 0);
+        if (!cheated && newEmpty.length <= 2) {
+          dialogueEl.textContent = '嗯...好像快下完了...';
         } else {
-          statusEl.textContent = '換你下（✕）';
-          statusEl.className = 'status';
+          dialogueEl.textContent = rand(dialogues.normal);
         }
       }
 
       moveCountEl.textContent = `第 ${moveNum} 手`;
+
+      if (board.every(c => c !== null) && !cheated) {
+        statusEl.textContent = '平手！...嗎？';
+        statusEl.className = 'status';
+        // 最後一刻作弊
+        setTimeout(() => {
+          const cheatLine = findCheatOpportunityForced();
+          if (cheatLine) {
+            dialogueEl.textContent = '等一下，我再看看...';
+            setTimeout(() => doCheat(cheatLine), 800);
+            return;
+          }
+          gameOver = true;
+          resetBtn.style.display = '';
+        }, 1000);
+        return;
+      }
+
+      statusEl.textContent = '換你下（✕）';
+      statusEl.className = 'status';
     }
 
-    function placeCheatMark() {
+    // 找一條線：電腦有 2 個，第 3 格可以延伸到外面
+    function findCheatOpportunity() {
+      for (const line of WINS) {
+        const oCount = line.filter(i => board[i] === 'O').length;
+        const xCount = line.filter(i => board[i] === 'X').length;
+        if (oCount === 2 && xCount <= 1) {
+          return line;
+        }
+      }
+      return null;
+    }
+
+    // 強制版：即使被擋也延伸
+    function findCheatOpportunityForced() {
+      for (const line of WINS) {
+        const oCount = line.filter(i => board[i] === 'O').length;
+        if (oCount >= 2) return line;
+      }
+      // 找任何有 O 的線
+      for (const line of WINS) {
+        if (line.some(i => board[i] === 'O')) return line;
+      }
+      return WINS[0];
+    }
+
+    function doCheat(line) {
+      cheated = true;
+      dialogueEl.textContent = rand(dialogues.cheat);
+
+      // 找出電腦在這條線上的兩個位置
+      const oCells = line.filter(i => board[i] === 'O');
+      if (oCells.length < 2) {
+        // 只有 1 個 O，找方向延伸兩個出去
+        const oCell = oCells[0] !== undefined ? oCells[0] : line[0];
+        placeCheatExtension(line, oCell, 2);
+      } else {
+        // 有 2 個 O，延伸 1 個出去
+        placeCheatExtension(line, oCells[0], 1);
+      }
+    }
+
+    function placeCheatExtension(line, anchor, count) {
+      // 算延伸方向
+      const r0 = POS[line[0]][0], c0 = POS[line[0]][1];
+      const r2 = POS[line[2]][0], c2 = POS[line[2]][1];
+      const dr = r2 - r0, dc = c2 - c0;
+
+      // 格子的像素位置
       const gridRect = grid.getBoundingClientRect();
       const areaRect = gameArea.getBoundingClientRect();
+      const cellSize = 84; // 80 + 4 gap
 
-      // 計算格子外面的位置
-      const positions = [
-        // 右邊外面
-        { x: gridRect.right - areaRect.left + 15 + cheatMarks.length * 5,
-          y: gridRect.top - areaRect.top + 40 + cheatMarks.length * 80 },
-        // 上面外面
-        { x: gridRect.left - areaRect.left + 40 + cheatMarks.length * 80,
-          y: gridRect.top - areaRect.top - 45 },
-        // 左邊外面
-        { x: gridRect.left - areaRect.left - 45,
-          y: gridRect.top - areaRect.top + 40 + cheatMarks.length * 80 },
-      ];
+      // 延伸到線的末端之外
+      const endIdx = line[2];
+      const endR = POS[endIdx][0];
+      const endC = POS[endIdx][1];
 
-      // 選一個方向（第一次右邊，然後依序）
-      const pos = cheatMarks.length === 0
-        ? { x: gridRect.right - areaRect.left + 20, y: gridRect.top - areaRect.top + 40 }
-        : cheatMarks.length === 1
-        ? { x: gridRect.right - areaRect.left + 20, y: gridRect.top - areaRect.top + 120 }
-        : { x: gridRect.right - areaRect.left + 20, y: gridRect.top - areaRect.top + 200 };
+      for (let i = 0; i < count; i++) {
+        const extR = endR + dr * (i + 1);
+        const extC = endC + dc * (i + 1);
 
-      const mark = document.createElement('div');
-      mark.className = 'cheat-mark';
-      mark.textContent = '◯';
-      mark.style.left = pos.x + 'px';
-      mark.style.top = pos.y + 'px';
-      gameArea.appendChild(mark);
-      cheatMarks.push({ el: mark, x: pos.x, y: pos.y });
+        const baseX = gridRect.left - areaRect.left + 4 + 40; // grid padding + half cell
+        const baseY = gridRect.top - areaRect.top + 4 + 40;
+        const x = baseX + extC * cellSize - 15;
+        const y = baseY + extR * cellSize - 15;
+
+        setTimeout(() => {
+          const mark = document.createElement('div');
+          mark.className = 'cheat-mark';
+          mark.textContent = '◯';
+          mark.style.left = x + 'px';
+          mark.style.top = y + 'px';
+          gameArea.appendChild(mark);
+          cheatMark = { x, y };
+
+          if (i === count - 1 || count === 1) {
+            // 畫連線
+            setTimeout(() => {
+              drawWinLine(line, count);
+              statusEl.textContent = '電腦贏了！';
+              statusEl.className = 'status win';
+              dialogueEl.textContent = rand(dialogues.win);
+              gameOver = true;
+              resetBtn.style.display = '';
+            }, 500);
+          }
+        }, i * 400);
+      }
     }
 
-    function drawCheatLine() {
-      if (cheatMarks.length < 3) return;
-      const first = cheatMarks[0];
-      const last = cheatMarks[cheatMarks.length - 1];
-      const dx = last.x - first.x;
-      const dy = last.y - first.y;
-      const length = Math.sqrt(dx * dx + dy * dy) + 30;
+    function drawWinLine(line, extCount) {
+      const gridRect = grid.getBoundingClientRect();
+      const areaRect = gameArea.getBoundingClientRect();
+      const cellSize = 84;
+      const baseX = gridRect.left - areaRect.left + 4 + 40;
+      const baseY = gridRect.top - areaRect.top + 4 + 40;
+
+      const r0 = POS[line[0]][0], c0 = POS[line[0]][1];
+      const r2 = POS[line[2]][0], c2 = POS[line[2]][1];
+      const dr = r2 - r0, dc = c2 - c0;
+
+      const startX = baseX + c0 * cellSize;
+      const startY = baseY + r0 * cellSize;
+      const endX = baseX + (c2 + dc * extCount) * cellSize;
+      const endY = baseY + (r2 + dr * extCount) * cellSize;
+
+      const dx = endX - startX;
+      const dy = endY - startY;
+      const length = Math.sqrt(dx * dx + dy * dy);
       const angle = Math.atan2(dy, dx) * 180 / Math.PI;
 
-      const line = document.createElement('div');
-      line.className = 'cheat-line';
-      line.style.left = (first.x + 10) + 'px';
-      line.style.top = (first.y + 15) + 'px';
-      line.style.width = length + 'px';
-      line.style.transform = `rotate(${angle}deg)`;
-      gameArea.appendChild(line);
+      const lineEl = document.createElement('div');
+      lineEl.className = 'cheat-line';
+      lineEl.style.left = startX + 'px';
+      lineEl.style.top = startY + 'px';
+      lineEl.style.setProperty('--line-len', length + 'px');
+      lineEl.style.transform = `rotate(${angle}deg)`;
+      gameArea.appendChild(lineEl);
     }
 
     function checkWin(player) {
-      const wins = [
-        [0,1,2],[3,4,5],[6,7,8],
-        [0,3,6],[1,4,7],[2,5,8],
-        [0,4,8],[2,4,6]
-      ];
-      return wins.some(w => w.every(i => board[i] === player));
+      return WINS.some(w => w.every(i => board[i] === player));
     }
 
-    function resetGame() {
-      board = Array(9).fill(null);
-      cheatMarks.forEach(m => m.el.remove());
-      cheatMarks = [];
-      gameOver = false;
-      moveNum = 0;
-      playerMoves = 0;
-
-      // 清掉格子外的元素
-      gameArea.querySelectorAll('.cheat-mark, .cheat-line').forEach(el => el.remove());
-
-      // 重置格子
-      for (let i = 0; i < 9; i++) {
-        grid.children[i].innerHTML = '';
-        grid.children[i].classList.remove('taken');
-      }
-
-      statusEl.textContent = '你先下（✕）';
-      statusEl.className = 'status';
-      dialogueEl.textContent = '';
-      resetBtn.style.display = 'none';
-      moveCountEl.textContent = '';
+    function doWin() {
+      statusEl.textContent = '電腦贏了！';
+      statusEl.className = 'status win';
+      dialogueEl.textContent = '正常贏的，不用作弊 😎';
+      gameOver = true;
+      resetBtn.style.display = '';
+      moveCountEl.textContent = `第 ${moveNum} 手`;
     }
   </script>
 </body>
